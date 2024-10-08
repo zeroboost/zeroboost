@@ -1,0 +1,11 @@
+[package]
+name = "curve"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+no-logging = []
+
+[dependencies]
+anchor-lang="0.29.0"
+spl-math="0.2.0"
