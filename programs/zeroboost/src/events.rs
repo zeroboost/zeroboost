@@ -15,12 +15,12 @@ pub struct MintEvent {
 
 #[event]
 pub struct SwapEvent {
+    pub token: Pubkey,
     pub mint: Pubkey,
     pub token_amount: u64,
     pub pair_amount: u64,
     pub virtual_token_balance: u64,
     pub virtual_pair_balance: u64,
-    pub market_cap: u64,
     pub trade_direction: u8,
     pub payer: Pubkey,
     pub timestamp: i64,
@@ -29,7 +29,7 @@ pub struct SwapEvent {
 #[event]
 pub struct MigrateTriggerEvent {
     pub mint: Pubkey,
-    pub timestamp: i64
+    pub timestamp: i64,
 }
 
 #[event]

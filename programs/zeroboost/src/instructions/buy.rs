@@ -11,6 +11,7 @@ use curve::{
 
 use crate::{
     error::SwapTokenError,
+    events::SwapEvent,
     states::{
         bounding_curve::BoundingCurve,
         position::{Position, POSITION_SIZE},
@@ -209,6 +210,20 @@ impl<'info> Buy<'info> {
         if bounding_curve.virtual_pair_balance >= bounding_curve.maximum_pair_balance {
             bounding_curve.tradeable = false;
         }
+
+        let clock = Clock::get()?;
+
+        emit!(SwapEvent {
+            token_amount,
+            pair_amount,
+            token: token.key(),
+            mint: mint.key(),
+            trade_direction: 1,
+            payer: payer.key(),
+            timestamp: clock.unix_timestamp,
+            virtual_pair_balance: bounding_curve.virtual_pair_balance,
+            virtual_token_balance: bounding_curve.virtual_token_balance,
+        });
 
         Ok(())
     }

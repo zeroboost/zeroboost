@@ -1,10 +1,7 @@
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{
-        burn, transfer_checked, Burn, Mint, Token, TokenAccount,
-        TransferChecked,
-    },
+    token::{burn, transfer_checked, Burn, Mint, Token, TokenAccount, TransferChecked},
 };
 use curve::{
     curve::{constant_curve::ConstantCurveCalculator, CurveCalculator, TradeDirection},
@@ -13,6 +10,7 @@ use curve::{
 
 use crate::{
     error::SwapTokenError,
+    events::SwapEvent,
     states::{bounding_curve::BoundingCurve, position::Position},
     utils::Validate,
     CURVE_RESERVE_SEED, CURVE_SEED, POSITION_SEED,
@@ -198,8 +196,6 @@ impl<'info> Sell<'info> {
             )?;
         }
 
-        msg!("payer_token_ata={}", payer_token_ata.key().to_string());
-
         burn(
             CpiContext::new(
                 token_program.to_account_info(),
@@ -211,6 +207,20 @@ impl<'info> Sell<'info> {
             ),
             token_amount,
         )?;
+        
+        let clock = Clock::get()?;
+
+        emit!(SwapEvent {
+            token_amount,
+            pair_amount,
+            token: token.key(),
+            mint: mint.key(),
+            trade_direction: 1,
+            payer: payer.key(),
+            timestamp: clock.unix_timestamp,
+            virtual_pair_balance: bounding_curve.virtual_pair_balance,
+            virtual_token_balance: bounding_curve.virtual_token_balance,
+        });
 
         Ok(())
     }
