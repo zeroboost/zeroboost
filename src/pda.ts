@@ -66,7 +66,10 @@ export const getBoundingCurveConfig = (
   };
 };
 
-export const getCreatorConfig = (
-  mint: web3.PublicKey,
-  pair: web3.PublicKey
-) => {};
+export const getPositionPda = (
+  token: web3.PublicKey,
+  programId: web3.PublicKey
+) => {
+  const seeds = [token.toBuffer(), Buffer.from("position")];
+  return web3.PublicKey.findProgramAddressSync(seeds, programId);
+};

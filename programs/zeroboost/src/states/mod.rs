@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+pub mod position;
 pub mod config;
 pub mod bounding_curve;
 

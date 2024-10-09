@@ -64,6 +64,7 @@ pub mod pyth {
 pub const CONFIG_SEED: &str = "zeroboost";
 pub const CURVE_SEED: &str = "curve";
 pub const CURVE_RESERVE_SEED: &str = "curve_reserve";
+pub const POSITION_SEED: &str = "position";
 
 #[program]
 pub mod zeroboost {
@@ -80,8 +81,12 @@ pub mod zeroboost {
         MintToken::process_mint_token(context, &params)
     }
 
-    pub fn swap(context: Context<Swap>, params: SwapParams) -> Result<()> {
-        Swap::process_swap(context, &params)
+    pub fn buy(context: Context<Buy>, params: BuyParams) -> Result<()> {
+        Buy::process_buy(context, &params)
+    }
+    
+    pub fn sell(context: Context<Sell>, params: SellParams) -> Result<()> {
+      Sell::process_sell(context, params)
     }
 
     pub fn migrate_fund(context: Context<MigrateFund>, params: MigrateFundParams) -> Result<()> {

@@ -24,7 +24,7 @@ use crate::{
     events::MintEvent,
     metadata_fee_reciever, pyth,
     states::{
-        bounding_curve::{BoundingCurve, MigrationTarget, BOUNDING_CURVE_SIZE},
+        bounding_curve::{BoundingCurve, MigrationTarget, Pair, BOUNDING_CURVE_SIZE},
         config::Config,
     },
     utils::{price_to_number, Validate},
@@ -123,6 +123,7 @@ pub struct MintTokenParams {
     uri: String,
     supply: u64,
     decimals: u8,
+    is_native: bool,
     liquidity_percentage: u8,
     migration_target: MigrationTarget,
 }
@@ -178,6 +179,9 @@ impl<'info> MintToken<'info> {
         ];
         let signer_seeds = [&signer_seeds[..]];
 
+        let feed = SolanaPriceAccount::account_info_to_feed(&pyth_pair_usd_feed).unwrap();
+        let pair_usd_price = price_to_number(feed.get_price_unchecked());
+
         mint_to(
             CpiContext::new_with_signer(
                 token_program.to_account_info(),
@@ -190,9 +194,6 @@ impl<'info> MintToken<'info> {
             ),
             params.supply,
         )?;
-
-        let feed = SolanaPriceAccount::account_info_to_feed(&pyth_pair_usd_feed).unwrap();
-        let pair_usd_price = price_to_number(feed.get_price_unchecked());
 
         let metadata_fee: u64 = (config.metadata_creation_fee as u64).mul(10_u64.pow(5));
 
@@ -229,10 +230,10 @@ impl<'info> MintToken<'info> {
 
         bounding_curve.migrated = false;
         bounding_curve.tradeable = true;
-        bounding_curve.pair = pair.key();
         bounding_curve.mint = mint.key();
-        bounding_curve.initial_price = initial_price.unwrap::<f64>();
-        bounding_curve.initial_supply = bounding_curve_supply;
+        bounding_curve.supply = params.supply;
+        bounding_curve.pair = Pair::new(pair.key(), params.is_native);
+        bounding_curve.price = initial_price.unwrap::<f64>();
         bounding_curve.liquidity_percentage = params.liquidity_percentage;
         bounding_curve.minimum_pair_balance = minimum_curve_pair_valuation;
         bounding_curve.maximum_pair_balance = maximum_pair_balance;

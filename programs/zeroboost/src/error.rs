@@ -16,6 +16,8 @@ pub enum SwapTokenError {
     NotTradeable,
     #[msg("Amount must be a value greater than zero")]
     InvalidAmount,
+    #[msg("mint supply is empty")]
+    EmptySupply,
 }
 
 #[error_code]

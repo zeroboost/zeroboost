@@ -3,15 +3,23 @@ import { expect } from "chai";
 import { Program, web3 } from "@coral-xyz/anchor";
 import { workspace, setProvider, AnchorProvider, BN } from "@coral-xyz/anchor";
 
-import { MintLayout, NATIVE_MINT } from "@solana/spl-token";
+import {
+  createAssociatedTokenAccountIdempotent,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
+  getAssociatedTokenAddressSync,
+  MintLayout,
+  NATIVE_MINT,
+} from "@solana/spl-token";
 import { Amman } from "@metaplex-foundation/amman-client";
 
 import {
+  buy,
   getEstimatedRaydiumCpPoolCreationFee,
   initializeConfig,
   migrateFund,
   mintToken,
-  swap,
+  sell,
 } from "../src";
 import { Zeroboost } from "../target/types/zeroboost";
 import { buildConfig } from "./config";
@@ -48,7 +56,7 @@ describe("zeroboost", async () => {
       symbol: "FLIEDLICE",
       uri: "https://fliedlice.xyz",
       supply: 1_000_000_000,
-      decimals: 9,
+      decimals: 6,
     },
   });
 
@@ -88,7 +96,12 @@ describe("zeroboost", async () => {
   });
 
   it("Create mint and curve info", async () => {
-    const instructions = await mintToken(
+    const payerPairAta = getAssociatedTokenAddressSync(
+      NATIVE_MINT,
+      program.provider.publicKey!
+    );
+
+    const signature = await mintToken(
       program,
       NATIVE_MINT,
       program.provider.publicKey!,
@@ -98,22 +111,29 @@ describe("zeroboost", async () => {
         uri,
         decimals,
         liquidityPercentage,
+        isNative: true,
         supply: new BN(supply.toString()),
         migrationTarget: {
           raydium: {},
         },
       },
       SOL_USD_FEED
-    ).instruction();
-
-    const transaction = new web3.Transaction()
-      .add(
-        web3.ComputeBudgetProgram.setComputeUnitLimit({
-          units: 250_000,
-        })
-      )
-      .add(instructions);
-    const signature = await program.provider!.sendAndConfirm!(transaction);
+    )
+      .postInstructions([
+        createAssociatedTokenAccountIdempotentInstruction(
+          program.provider.publicKey!,
+          payerPairAta,
+          program.provider.publicKey!,
+          NATIVE_MINT
+        ),
+        web3.SystemProgram.transfer({
+          fromPubkey: program.provider.publicKey!,
+          toPubkey: payerPairAta,
+          lamports: BigInt(1_000_000_000_000),
+        }),
+        createSyncNativeInstruction(payerPairAta),
+      ])
+      .rpc();
 
     console.log("mint=", signature);
 
@@ -138,36 +158,44 @@ describe("zeroboost", async () => {
     );
   });
 
-  it("Buy minted token", async () => {
+  it("Buy and sell minted token", async () => {
     const boundingCurveInfo = await program.account.boundingCurve.fetch(
       boundingCurve
     );
 
-    const signature = await (
-      await swap(program, boundingCurveInfo.mint, program.provider.publicKey!, {
+    const { pubkeys, signature } = await (
+      await buy(program, boundingCurveInfo.mint, program.provider.publicKey!, {
         amount: boundingCurveInfo.maximumPairBalance,
-        tradeDirection: 0,
       })
-    ).rpc();
+    ).rpcAndKeys();
+
+    // const sellSignature = await (
+    //   await sell(
+    //     program,
+    //     pubkeys.mint!,
+    //     pubkeys.token!,
+    //     program.provider.publicKey!,
+    //     { amount: new BN(5_000).mul(new BN(10).pow(new BN(6))) }
+    //   )
+    // ).rpc();
 
     console.log("buy=", signature);
+    // console.log("sell=", sellSignature);
   });
 
   it("Migrate fund", async () => {
-    const instructions = await (
+    const signature = await (
       await migrateFund(program, boundingCurve, program.provider.publicKey!, {
         openTime: new BN(0),
       })
-    ).instruction();
+    )
+      .preInstructions([
+        web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 350_000,
+        }),
+      ])
+      .rpc();
 
-    const transaction = new web3.Transaction();
-    transaction.add(
-      web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 })
-    );
-    transaction.add(instructions);
-
-    const tx = await program.provider.sendAndConfirm!(transaction);
-
-    console.log("migrate=", tx);
+    console.log("migrate=", signature);
   });
 });

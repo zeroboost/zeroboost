@@ -1,11 +1,13 @@
 use std::ops::{Div, Mul};
 
-use anchor_lang::prelude::*;
 use anchor_lang::system_program::{transfer, Transfer};
-use anchor_spl::token::{transfer_checked, TransferChecked};
+use anchor_lang::{prelude::*, system_program};
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{burn, Burn, Mint, Token, TokenAccount},
+    token::{
+        burn, sync_native, transfer_checked, Burn, Mint, SyncNative, Token, TokenAccount,
+        TransferChecked,
+    },
 };
 use raydium_cp_swap::{
     cpi::{accounts::Initialize, initialize},
@@ -17,10 +19,10 @@ use raydium_cp_swap::{
 use spl_token::solana_program::program_pack::Pack;
 
 use crate::{
-    events::MigrateEvent,
     error::MigrateFundError,
-    states::{bounding_curve::BoundingCurve, config::Config},
+    events::MigrateEvent,
     migration_fee_receiver,
+    states::{bounding_curve::BoundingCurve, config::Config},
     CONFIG_SEED, CURVE_RESERVE_SEED, CURVE_SEED,
 };
 
@@ -30,7 +32,7 @@ pub struct MigrateFund<'info> {
     config: Box<Account<'info, Config>>,
     #[account(address = bounding_curve.mint)]
     mint: Box<Account<'info, Mint>>,
-    #[account(address = bounding_curve.pair)]
+    #[account(address = bounding_curve.pair.mint)]
     pair: Box<Account<'info, Mint>>,
     #[account(mut, seeds = [mint.key().as_ref(), CURVE_SEED.as_bytes()], bump)]
     bounding_curve: Box<Account<'info, BoundingCurve>>,
@@ -196,7 +198,6 @@ impl<'info> MigrateFund<'info> {
             ..
         } = context;
         let bounding_curve = &mut context.accounts.bounding_curve;
-        
 
         if bounding_curve.tradeable {
             return err!(MigrateFundError::NotMigratable);
@@ -225,8 +226,10 @@ impl<'info> MigrateFund<'info> {
             config.estimated_raydium_cp_pool_creation_fee,
         )?;
 
+        let minimum_rent = Rent::get()?.minimum_balance(0);
+
         let init_amount = bounding_curve_ata.amount;
-        let pair_init_amount = bounding_curve_reserve_pair_ata.amount;
+        let pair_init_amount = bounding_curve_reserve.get_lamports() - minimum_rent;
 
         let admin_fee = pair_init_amount
             .mul(config.migration_percentage_fee as u64)
@@ -247,28 +250,37 @@ impl<'info> MigrateFund<'info> {
             admin_fee,
             pair.decimals,
         )?;
-        
 
-        let mint_key = mint.key();
+        let bounding_curve_key = bounding_curve.key();
 
-        transfer_checked(
-            CpiContext::new_with_signer(
+        if bounding_curve.pair.is_native {
+            let signer_seeds = &[
+                &bounding_curve_key.as_ref(),
+                CURVE_RESERVE_SEED.as_bytes(),
+                &[bumps.bounding_curve_reserve],
+            ];
+            let signer_seeds = &[&signer_seeds[..]];
+
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    token_program.to_account_info(),
+                    system_program::Transfer {
+                        from: bounding_curve_reserve.to_account_info(),
+                        to: bounding_curve_reserve_pair_ata.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                pair_init_amount,
+            )?;
+
+            sync_native(CpiContext::new_with_signer(
                 token_program.to_account_info(),
-                TransferChecked {
-                    mint: mint.to_account_info(),
-                    to: bounding_curve_reserve_ata.to_account_info(),
-                    from: bounding_curve_ata.to_account_info(),
-                    authority: bounding_curve.to_account_info(),
+                SyncNative {
+                    account: bounding_curve_reserve_pair_ata.to_account_info(),
                 },
-                &[&[
-                    &mint_key.as_ref(),
-                    CURVE_SEED.as_bytes(),
-                    &[bumps.bounding_curve],
-                ]],
-            ),
-            init_amount,
-            pair.decimals,
-        )?;
+                signer_seeds,
+            ))?;
+        }
 
         initialize(
             CpiContext::new_with_signer(
@@ -300,8 +312,8 @@ impl<'info> MigrateFund<'info> {
             pair_init_amount,
             init_amount,
             match params.open_time {
-              Some(open_time) => open_time,
-              None => 0
+                Some(open_time) => open_time,
+                None => 0,
             },
         )?;
 
@@ -322,8 +334,7 @@ impl<'info> MigrateFund<'info> {
             ),
             bounding_curve_reserve_lp.amount,
         )?;
-        
-        
+
         bounding_curve.migrated = true;
 
         let clock = Clock::get()?;

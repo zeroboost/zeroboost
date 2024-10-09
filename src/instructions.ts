@@ -1,6 +1,13 @@
 import { Program, web3 } from "@coral-xyz/anchor";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
+  createInitializeMintInstruction,
+  getAssociatedTokenAddressSync,
+  MINT_SIZE,
+  MintLayout,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  generatePubKey,
   getCreatePoolKeys,
   getPdaAmmConfigId,
 } from "@raydium-io/raydium-sdk-v2";
@@ -12,13 +19,15 @@ import {
   MPL_TOKEN_METADATA_PROGRAM_ID,
 } from "@metaplex-foundation/mpl-token-metadata";
 
-import { devnet } from ".";
 import type { Zeroboost } from "../target/types/zeroboost";
+
+import { devnet } from ".";
 import {
   getBoundingCurveConfig,
   getBoundingCurvePda,
   getConfigPda,
   getMintPda,
+  getPositionPda,
 } from "./pda";
 
 export const initializeConfig = (
@@ -71,67 +80,107 @@ export const mintToken = (
   });
 };
 
-export const swap = async (
+export const buy = async (
   program: Program<Zeroboost>,
   mint: web3.PublicKey,
   payer: web3.PublicKey,
-  params: Parameters<(typeof program)["methods"]["swap"]>[number],
+  params: Parameters<(typeof program)["methods"]["buy"]>[number]
 ) => {
   const programId = program.programId;
-
-  const [config] = getConfigPda(programId);
   const [boundingCurve] = getBoundingCurvePda(mint, programId);
-  const { pair } = await program.account.boundingCurve.fetch(boundingCurve);
+  const {
+    pair: { mint: pair },
+  } = await program.account.boundingCurve.fetch(boundingCurve);
   const {
     boundingCurveReserve,
     boundingCurveReserveAta,
     boundingCurveReservePairAta,
   } = getBoundingCurveConfig(mint, pair, programId);
 
-  const payerAta = getAssociatedTokenAddressSync(mint, payer);
+  const { publicKey: token, seed: tokenSeed } = generatePubKey({
+    fromPublicKey: payer,
+    programId: TOKEN_PROGRAM_ID,
+  });
+  const [position] = getPositionPda(token, programId);
+  const payerTokenAta = getAssociatedTokenAddressSync(token, payer);
   const payerPairAta = getAssociatedTokenAddressSync(pair, payer);
 
-  return program.methods.swap(params).accounts({
-    mint,
-    pair,
-    payer,
-    payerAta,
-    payerPairAta,
-    config,
-    boundingCurve,
-    boundingCurveReserve,
-    boundingCurveReserveAta,
-    boundingCurveReservePairAta,
-  });
+  const mintRent =
+    await program.provider.connection.getMinimumBalanceForRentExemption(
+      MINT_SIZE
+    );
+
+  const mintInfo = MintLayout.decode(
+    (await program.provider.connection.getAccountInfo(mint))!.data
+  );
+
+  return program.methods
+    .buy(params)
+    .preInstructions([
+      web3.SystemProgram.createAccountWithSeed({
+        fromPubkey: payer,
+        newAccountPubkey: token,
+        basePubkey: payer,
+        seed: tokenSeed,
+        lamports: mintRent,
+        space: MINT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+      }),
+      createInitializeMintInstruction(
+        token,
+        mintInfo.decimals,
+        boundingCurveReserve,
+        boundingCurveReserve
+      ),
+    ])
+    .accounts({
+      token,
+      mint,
+      pair,
+      payer,
+      payerTokenAta,
+      payerPairAta,
+      position,
+      boundingCurve,
+      boundingCurveReserve,
+      boundingCurveReserveAta,
+      boundingCurveReservePairAta,
+    });
 };
 
-export const rawSwap = async (
+export const sell = async (
   program: Program<Zeroboost>,
   mint: web3.PublicKey,
-  pair: web3.PublicKey,
+  token: web3.PublicKey,
   payer: web3.PublicKey,
-  params: Parameters<(typeof program)["methods"]["swap"]>[number],
+  params: Parameters<(typeof program)["methods"]["sell"]>[number]
 ) => {
   const programId = program.programId;
-  const [config] = getConfigPda(programId);
-  const [boundingCurve] = getBoundingCurvePda(mint, programId);
 
+  const [boundingCurve] = getBoundingCurvePda(mint, programId);
+  const {
+    pair: { mint: pair },
+  } = await program.account.boundingCurve.fetch(boundingCurve);
   const {
     boundingCurveReserve,
     boundingCurveReserveAta,
     boundingCurveReservePairAta,
   } = getBoundingCurveConfig(mint, pair, programId);
 
+  const [position] = getPositionPda(token, programId);
   const payerAta = getAssociatedTokenAddressSync(mint, payer);
+  const payerTokenAta = getAssociatedTokenAddressSync(token, payer);
   const payerPairAta = getAssociatedTokenAddressSync(pair, payer);
 
-  return program.methods.swap(params).accounts({
+  return program.methods.sell(params).accounts({
     mint,
     pair,
+    token,
     payer,
     payerAta,
+    payerTokenAta,
     payerPairAta,
-    config,
+    position,
     boundingCurve,
     boundingCurveReserve,
     boundingCurveReserveAta,
@@ -145,7 +194,7 @@ export const migrateFund = async (
   payer: web3.PublicKey,
   params: Parameters<(typeof program)["methods"]["migrateFund"]>[number],
   raydiumCpPoolProgram = devnet.RAYDIUM_CP_POOL_PROGRAM,
-  raydiumCpPoolFeeReciever = devnet.RAYDIUM_CP_FEE_RECIEVER,
+  raydiumCpPoolFeeReciever = devnet.RAYDIUM_CP_FEE_RECIEVER
 ) => {
   const programId = program.programId;
 
@@ -153,17 +202,17 @@ export const migrateFund = async (
   const { mint, pair } = await program.account.boundingCurve.fetch(
     boundingCurve
   );
-  const payerPairAta = getAssociatedTokenAddressSync(pair, payer);
+  const payerPairAta = getAssociatedTokenAddressSync(pair.mint, payer);
   const {
     boundingCurveAta,
     boundingCurveReserve,
     boundingCurveReserveAta,
     boundingCurveReservePairAta,
-  } = getBoundingCurveConfig(mint, pair, programId);
+  } = getBoundingCurveConfig(mint, pair.mint, programId);
   const { publicKey: configId } = getPdaAmmConfigId(raydiumCpPoolProgram, 0);
   const poolkeys = getCreatePoolKeys({
     configId,
-    mintA: pair,
+    mintA: pair.mint,
     mintB: mint,
     programId: raydiumCpPoolProgram,
   });
@@ -175,7 +224,7 @@ export const migrateFund = async (
   );
 
   return program.methods.migrateFund(params).accounts({
-    pair,
+    pair: pair.mint,
     mint,
     config,
     payer,
